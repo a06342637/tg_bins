@@ -52,6 +52,7 @@ LOG_LINES="${LOG_LINES:-20}"
   done
   echo "settings:"
   echo "  log_lines: $LOG_LINES"
+  echo "  log_retention_days: 30"
 } > config.yaml
 
 echo

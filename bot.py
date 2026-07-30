@@ -71,6 +71,11 @@ def is_authed(uid):
     return uid in AUTHORIZED
 
 
+def _looks_like_uid(s):
+    """Telegram user_id 目前约 5–12 位数字;借此把误粘贴的卡号(13+ 位)挡在授权之外。"""
+    return s.isdigit() and 5 <= len(s) <= 12
+
+
 def _log_op(uid, action, detail=""):
     if STORAGE:
         STORAGE.log_op(uid, action, detail)
@@ -165,8 +170,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_adduser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_super(update.effective_user.id):
         return
-    if not context.args or not INT_RE.match(context.args[0]):
-        await update.message.reply_text("用法:/adduser <数字 user_id>")
+    if not context.args or not _looks_like_uid(context.args[0]):
+        await update.message.reply_text("用法:/adduser <5–12 位数字 user_id>")
         return
     await _do_add_user(update.effective_user.id, int(context.args[0]), update.message.reply_text)
 
@@ -236,15 +241,17 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         awaiting = context.user_data.get("await")
         if awaiting == "add_user":
             context.user_data.pop("await", None)
-            if not INT_RE.match(text):
-                await update.message.reply_text("已取消:输入的不是数字 user_id。")
+            if not _looks_like_uid(text):
+                await update.message.reply_text(
+                    "已取消:这不像一个 user_id(应为 5–12 位数字)。要查卡号请直接发卡号。"
+                )
                 return
             await _do_add_user(uid, int(text), update.message.reply_text)
             return
         if awaiting == "set_days":
             context.user_data.pop("await", None)
-            if not text.isdigit() or int(text) <= 0:
-                await update.message.reply_text("已取消:请输入正整数天数。")
+            if not text.isdigit() or not (1 <= int(text) <= 3650):
+                await update.message.reply_text("已取消:请输入 1–3650 之间的天数。")
                 return
             _set_retention(int(text), uid)
             await update.message.reply_text(f"✅ 日志保留天数已设为 {LOG_RETENTION_DAYS} 天。")
@@ -264,6 +271,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if err is None and results:
         await msg.edit_text(render_multi(results))
+    elif err == "WRONG_INPUT":
+        await msg.edit_text(f"⚠️ {disp} 不是有效 BIN(HandyAPI 需要至少 6 位数字)。")
     elif err == "NEED_LOCAL":
         await msg.edit_text("⚠️ 4–5 位查询需要本地 BIN 库,但未加载(缺 data/bin-list-data.csv)。")
     elif err == "NOT_FOUND":

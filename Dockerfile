@@ -1,8 +1,8 @@
 FROM python:3.12-slim
 
-# git 供『更新』按钮拉取代码;ca-certificates 供 HTTPS
+# git 供『更新』按钮拉取代码;ca-certificates 供 HTTPS;tzdata 让操作历史/日志时间按本地时区显示
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates \
+    && apt-get install -y --no-install-recommends git ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

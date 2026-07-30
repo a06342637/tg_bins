@@ -11,6 +11,8 @@ import time
 
 import httpx
 
+from zh import country_label
+
 logger = logging.getLogger("tgbins.handyapi")
 
 API_URL = "https://data.handyapi.com/bin/{bin}"
@@ -95,8 +97,13 @@ class KeyPool:
                 if status == "SUCCESS":
                     acc.success += 1
                     self.idx = (i + 1) % n  # round-robin:下次从下一个账号开始,均摊额度
-                    logger.info("BIN %s 查询成功 via %s", bin_code, acc.name)
-                    return _to_unified(bin_code, data, f"handyapi:{acc.name}"), acc.name, None
+                    unified = _to_unified(bin_code, data, f"handyapi:{acc.name}")
+                    logger.info(
+                        "BIN %s 查询成功 via %s | 国家 %s",
+                        bin_code, acc.name,
+                        country_label(unified["country_name"], unified["country_code"]),
+                    )
+                    return unified, acc.name, None
                 if "RATE LIMIT" in status:
                     acc.trip()
                     logger.warning("账号 %s 触发限流,冷却 %ds,自动切换下一个", acc.name, COOLDOWN_SECONDS)

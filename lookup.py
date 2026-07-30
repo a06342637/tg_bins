@@ -6,6 +6,8 @@
 """
 import logging
 
+from zh import country_label
+
 logger = logging.getLogger("tgbins.lookup")
 
 # 判定“不一致”只看核心硬字段,避免发卡行/等级的写法差异导致几乎每次都双发
@@ -41,7 +43,11 @@ class BinLookup:
             # HandyAPI 失败 / 全部限流 → 本地库兜底
             if local_data:
                 local_data["source"] = "local-fallback"
-                logger.info("BIN %s HandyAPI 失败(%s),本地库兜底命中", prefix, err)
+                logger.info(
+                    "BIN %s HandyAPI 失败(%s),本地库兜底命中 | 国家 %s",
+                    prefix, err,
+                    country_label(local_data["country_name"], local_data["country_code"]),
+                )
                 return [local_data], None
             return None, err
 
@@ -49,4 +55,10 @@ class BinLookup:
         if not self.local:
             return None, "NEED_LOCAL"
         loc = self.local.lookup(digits)
-        return ([loc], None) if loc else (None, "NOT_FOUND")
+        if loc:
+            logger.info(
+                "BIN %s 本地库命中(4–5 位) | 国家 %s",
+                digits, country_label(loc["country_name"], loc["country_code"]),
+            )
+            return [loc], None
+        return None, "NOT_FOUND"

@@ -34,6 +34,7 @@ from logbuffer import recent_logs, setup_logging
 from lookup import BinLookup
 from render import render_multi
 from storage import Storage
+from zh import country_label
 
 logger = logging.getLogger("tgbins")
 
@@ -267,7 +268,13 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     disp = digits[:6] if len(digits) >= 6 else digits
     msg = await update.message.reply_text(f"🔎 正在查询 {disp},请稍候…")
     results, err = await LOOKUP.query(digits)
-    _log_op(uid, "query", disp)
+
+    # 操作历史里记录卡号 + 查到的国家(中文/英文 (代码));查询失败则只记卡号
+    detail = disp
+    if err is None and results:
+        r0 = results[0]
+        detail = f"{disp} {country_label(r0.get('country_name'), r0.get('country_code'))}"
+    _log_op(uid, "query", detail)
 
     if err is None and results:
         await msg.edit_text(render_multi(results))
@@ -372,12 +379,26 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ["git", "config", "--global", "--add", "safe.directory", "/app"],
                 capture_output=True, text=True, timeout=30,
             )
-            r = subprocess.run(["git", "pull"], cwd="/app", capture_output=True, text=True, timeout=90)
+            r = subprocess.run(
+                ["git", "pull", "--ff-only"],
+                cwd="/app", capture_output=True, text=True, timeout=120,
+            )
             out = ((r.stdout or "") + (r.stderr or "")).strip()
+            # 拉取失败(冲突/网络/本地有改动等):绝不重启,把原因发出来,避免“假装更新了”
+            if r.returncode != 0:
+                logger.warning("git pull 失败(returncode=%s),不重启", r.returncode)
+                await q.message.reply_text(
+                    f"❌ 更新失败,未重启(git pull 返回码 {r.returncode}):\n{out[-1400:] or '(无输出)'}"
+                )
+                return
+            # 没有新提交:无需重启,省一次中断
+            if "Already up to date" in out or "已经是最新" in out:
+                await q.message.reply_text(f"✅ 已经是最新版本,无需更新(未重启)。\n\n{out[-400:]}")
+                return
             note = ""
             if "requirements.txt" in out:
                 note = "\n\n⚠️ 本次更新改动了依赖,重启后如异常,请在服务器执行:\n  docker compose up -d --build"
-            await q.message.reply_text(f"git pull:\n{out[-1400:]}{note}\n\n♻️ 即将重启以应用更新…")
+            await q.message.reply_text(f"✅ git pull 成功:\n{out[-1400:]}{note}\n\n♻️ 即将重启以应用更新…")
             logger.info("收到更新指令,git pull 完成,进程退出")
             os._exit(0)
         except Exception as e:  # noqa: BLE001

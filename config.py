@@ -23,7 +23,9 @@ def load_config():
     if not accounts:
         raise ValueError("配置缺少 handyapi.accounts(至少一个 HandyAPI 账号)")
 
-    cfg.setdefault("settings", {}).setdefault("log_lines", 20)
+    settings = cfg.setdefault("settings", {})
+    settings.setdefault("log_lines", 20)
+    settings.setdefault("log_retention_days", 30)  # 操作历史保留天数,超期自动清理(TG 内可改)
     # admin_ids 统一成 int 集合
     tg["admin_ids"] = [int(x) for x in tg["admin_ids"]]
     return cfg

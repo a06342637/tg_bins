@@ -4,7 +4,7 @@
 telegram:
   bot_token: "123456789:ABCdefGhIJKlmnOPQrsTUVwxyz"   # BotFather 给的 token
   admin_ids:                                            # 第一个是超级管理员(最高权限),其余仅可查询;其他人静默
-    - 123456789      # 超级管理员:查询 + 更新/重启/日志 + 增删用户
+    - 123456789      # 超级管理员:查询 + 更新/重启/历史/设置 + 增删用户
     - 987654321      # 授权用户:只能查卡号
 
 handyapi:
@@ -17,6 +17,7 @@ handyapi:
       backend_key: "HAS-yyyyyyyyyyyyyyyy"
 
 settings:
-  log_lines: 20                                        # 『日志』按钮显示最近多少条
-  # local_db: "data/bin-list-data.csv"                 # 本地 BIN 库路径(默认已内置,一般无需改)
-  # db_path: "data/tg_bins.db"                          # SQLite 路径(存动态授权用户,默认即可)
+  log_lines: 20                     # 『历史』按钮显示最近多少条操作记录
+  log_retention_days: 30            # 操作历史保留天数,超期自动清理(也可在 TG『设置』里改)
+  # local_db: "data/bin-list-data.csv"   # 本地 BIN 库路径(默认已内置,一般无需改)
+  # db_path: "data/tg_bins.db"           # SQLite 路径(存授权用户与操作历史,默认即可)

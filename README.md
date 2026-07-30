@@ -36,10 +36,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/a06342637/tg_bins/main/insta
 
 - **所有人**:`/id` 获取自己的 user id
 - **授权用户**:直接发数字查询;`/start` 显示欢迎
-- **超级管理员**(额外):
-  - 面板按钮:🔄 更新 / ♻️ 重启 / 📜 日志 / ℹ️ 状态
-  - `/adduser <id>` 添加授权用户 · `/deluser <id>` 移除 · `/users` 查看名单
-  - 动态添加的用户存 SQLite(`data/tg_bins.db`),重启后仍在。
+- **超级管理员**:`/start` 打开管理面板,**全部按钮操作**:
+  - 🔄 更新 / ♻️ 重启
+  - 👥 **用户**:➕ 添加(点后发 user_id)· ➖ 删除(列表点名移除)· 📋 列表
+  - 📜 **历史**:操作日志(谁、何时、查了哪个 BIN、增删用户等),最近 `log_lines` 条
+  - ⚙️ **设置**:日志保留天数(7 / 30 / 90 / 自定义),超期自动清理
+  - ℹ️ 状态:各账号可用/限流情况 + 最近运行日志
+  - 命令仍可用:`/adduser <id>` · `/deluser <id>` · `/users`
+  - 授权用户、操作历史、设置都存 SQLite(`data/tg_bins.db`),重启后仍在。
 
 ## 配置(后期修改)
 
@@ -49,7 +53,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/a06342637/tg_bins/main/insta
 
 - **重启**:进程退出,由 `restart: unless-stopped` 自动拉起(几秒恢复)。
 - **更新**:容器内 `git pull` 拉取最新代码后自动重启;若本次改了 `requirements.txt`(依赖),会提示你在服务器执行 `docker compose up -d --build`。
-- **日志**:返回内存中最近 `log_lines` 条(完整日志用 `docker compose logs -f`)。
+- **历史**:操作日志存 SQLite,展示最近 `log_lines` 条;超过「设置」里的保留天数自动清理(启动时 + 每 6 小时惰性清理一次)。
+- **状态**:各 HandyAPI 账号可用/限流情况,附最近几条运行日志(完整运行日志用 `docker compose logs -f`)。
 
 ## 注意事项
 

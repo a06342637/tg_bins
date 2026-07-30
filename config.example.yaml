@@ -3,11 +3,12 @@
 
 telegram:
   bot_token: "123456789:ABCdefGhIJKlmnOPQrsTUVwxyz"   # BotFather 给的 token
-  admin_ids:                                            # 只有这些人能查询和操作;其他人一律拒绝
-    - 123456789
+  admin_ids:                                            # 第一个是超级管理员(最高权限),其余仅可查询;其他人静默
+    - 123456789      # 超级管理员:查询 + 更新/重启/日志 + 增删用户
+    - 987654321      # 授权用户:只能查卡号
 
 handyapi:
-  accounts:                                             # 多账号轮询:一个限流会自动切下一个
+  accounts:                                             # 多账号 round-robin 轮询,限流自动切换,全限流用本地库兜底
     - name: "acct1"
       frontend_key: "PUB-xxxxxxxxxxxxxxxx"              # 前端 Publishable key
       backend_key: "HAS-xxxxxxxxxxxxxxxx"               # 后端 Secret key(查询优先用它)
@@ -18,3 +19,4 @@ handyapi:
 settings:
   log_lines: 20                                        # 『日志』按钮显示最近多少条
   # local_db: "data/bin-list-data.csv"                 # 本地 BIN 库路径(默认已内置,一般无需改)
+  # db_path: "data/tg_bins.db"                          # SQLite 路径(存动态授权用户,默认即可)

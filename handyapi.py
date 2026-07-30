@@ -1,8 +1,10 @@
-"""HandyAPI BIN 查询 + 多账号轮询。
+"""HandyAPI BIN 查询 + 三账号负载均衡(round-robin)。
 
-轮询:从当前账号开始依次尝试;某账号返回 RATE LIMIT 就冷却它并自动切下一个,对用户无感。
-查询默认用 backend(secret)key,没有则退回 frontend(publishable)key。
-query() 返回统一结果 dict(见 render.py 字段说明),而非 HandyAPI 原始结构。
+- round-robin:每次成功后把起点轮换到下一个账号,让月额度在多个账号间均摊;
+- 某账号返回 RATE LIMIT 就冷却它并自动跳到下一个,对用户无感;
+- 全部账号都在冷却时返回 RATE_LIMITED_ALL,由上层 lookup 兜底到本地库。
+
+query() 返回统一结果 dict(见 render.py 字段说明)。
 """
 import logging
 import time
@@ -65,7 +67,7 @@ class KeyPool:
             Account(a.get("name") or f"acct{i + 1}", a.get("frontend_key", ""), a.get("backend_key", ""))
             for i, a in enumerate(accounts_cfg)
         ]
-        self.idx = 0
+        self.idx = 0  # round-robin 起点
 
     async def query(self, bin_code):
         """返回 (unified|None, account_name|None, error)。error 为 None 表示成功。"""
@@ -92,7 +94,7 @@ class KeyPool:
                 status = str(data.get("Status", "")).upper()
                 if status == "SUCCESS":
                     acc.success += 1
-                    self.idx = i
+                    self.idx = (i + 1) % n  # round-robin:下次从下一个账号开始,均摊额度
                     logger.info("BIN %s 查询成功 via %s", bin_code, acc.name)
                     return _to_unified(bin_code, data, f"handyapi:{acc.name}"), acc.name, None
                 if "RATE LIMIT" in status:

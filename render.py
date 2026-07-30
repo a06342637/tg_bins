@@ -1,6 +1,7 @@
 """渲染『统一结果 dict』-> Telegram 文本:先英文块、后中文块;预付卡在最下面追加三遍警告。
 
 统一结果 dict 字段:bin, scheme, type, tier, issuer, country_name, country_code, prepaid(bool), source
+render_multi() 支持一个或两个结果(HandyAPI 与本地库不一致时并列对比)。
 """
 
 TYPE_ZH = {
@@ -29,6 +30,8 @@ COUNTRY_ZH = {
     "BH": "巴林", "KZ": "哈萨克斯坦", "UZ": "乌兹别克斯坦", "GE": "格鲁吉亚",
 }
 
+_PREPAID_WARN = "⚠️⚠️⚠️ 预付卡 PREPAID CARD ⚠️⚠️⚠️"
+
 
 def flag(a2):
     """A2 国家码 -> 国旗 emoji。"""
@@ -37,7 +40,7 @@ def flag(a2):
     return "".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in a2.upper())
 
 
-def render_result(u):
+def render_result(u, with_warning=True):
     bin_code = u.get("bin", "-")
     scheme = u.get("scheme") or "-"
     ctype = u.get("type") or "-"
@@ -68,11 +71,26 @@ def render_result(u):
         f"国家    : {cname_zh} {fl} ({a2})"
     )
     out = en + zh
-
-    if "local" in str(u.get("source", "")):
-        out += "\n\n(数据来源:本地库)"
-
-    if u.get("prepaid"):
-        warn = "⚠️⚠️⚠️ 预付卡 PREPAID CARD ⚠️⚠️⚠️"
-        out += "\n\n" + "\n".join([warn, warn, warn])
+    if with_warning and u.get("prepaid"):
+        out += "\n\n" + "\n".join([_PREPAID_WARN] * 3)
     return out
+
+
+def _source_label(u):
+    return "【HandyAPI】" if str(u.get("source", "")).startswith("handyapi") else "【本地库】"
+
+
+def render_multi(results):
+    """results: 1 个 -> 正常渲染;2 个 -> HandyAPI 与本地库不一致,并列对比。"""
+    results = [r for r in results if r]
+    if not results:
+        return "🤷 无数据"
+    if len(results) == 1:
+        return render_result(results[0])
+
+    header = "⚠️ HandyAPI 与本地库结果不一致,两个都给你对比:"
+    blocks = [f"{_source_label(r)}\n{render_result(r, with_warning=False)}" for r in results]
+    body = header + "\n\n" + "\n\n".join(blocks)
+    if any(r.get("prepaid") for r in results):
+        body += "\n\n" + "\n".join([_PREPAID_WARN] * 3)
+    return body

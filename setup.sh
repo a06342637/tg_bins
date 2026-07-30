@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
-# tg_bins 交互式部署向导:问几个问题 -> 生成 config.yaml -> 启动容器。
-# 用法:  bash setup.sh
+# tg_bins 交互式配置向导:问答生成 config.yaml 并启动容器。
+# 可单独运行:  bash setup.sh   (或由 install.sh 自动调用)
 set -e
+[ -t 0 ] || exec < /dev/tty
 
 echo "======================================"
-echo "        tg_bins 部署向导"
+echo "        tg_bins 配置向导"
 echo "======================================"
 echo
 
 read -rp "1) Telegram Bot Token (BotFather 提供): " BOT_TOKEN
-read -rp "2) 管理员 user id(多个用英文逗号分隔): " ADMIN_RAW
+echo "   管理员 user id:第一个是【超级管理员】(可增删用户 / 更新 / 重启 / 看日志),"
+echo "   其余仅可查询卡号。不知道 id?先把 bot 跑起来给它发 /id 获取。"
+read -rp "   多个用英文逗号分隔: " ADMIN_RAW
 
 while true; do
-  read -rp "3) 要配置几个 HandyAPI 账号做轮询? " N
+  read -rp "2) 要配置几个 HandyAPI 账号做轮询? " N
   [[ "$N" =~ ^[1-9][0-9]*$ ]] && break
   echo "   请输入一个正整数。"
 done
@@ -27,21 +30,21 @@ for ((i = 1; i <= N; i++)); do
   BKS[i]="$BK"
 done
 
-read -rp "4) 日志按钮显示最近几条?[默认 20]: " LOG_LINES
+read -rp "3) 日志按钮显示最近几条?[默认 20]: " LOG_LINES
 LOG_LINES="${LOG_LINES:-20}"
 
 # ---- 生成 config.yaml ----
 {
   echo "telegram:"
   echo "  bot_token: \"$BOT_TOKEN\""
-  echo "  admin_ids:"
+  echo "  admin_ids:            # 第一个是超级管理员(最高权限),其余仅可查询"
   IFS=',' read -ra IDS <<< "$ADMIN_RAW"
   for id in "${IDS[@]}"; do
     id="$(echo "$id" | xargs)"
     [ -n "$id" ] && echo "    - $id"
   done
   echo "handyapi:"
-  echo "  accounts:"
+  echo "  accounts:            # 多账号 round-robin 轮询,限流自动切换"
   for ((i = 1; i <= N; i++)); do
     echo "    - name: \"acct$i\""
     echo "      frontend_key: \"${FKS[i]}\""
@@ -52,11 +55,11 @@ LOG_LINES="${LOG_LINES:-20}"
 } > config.yaml
 
 echo
-echo "✅ 已生成 config.yaml(后期可直接编辑此文件,再点机器人里的『重启』即可生效)"
+echo "✅ 已生成 config.yaml(后期可直接编辑此文件,再点机器人里『重启』即可生效)"
 echo
 
 if ! command -v docker >/dev/null 2>&1; then
-  echo "⚠️  未检测到 docker,请先安装 Docker,然后运行: docker compose up -d --build"
+  echo "⚠️  未检测到 docker,请先安装,再运行: docker compose up -d --build"
   exit 1
 fi
 
@@ -66,4 +69,4 @@ echo
 echo "✅ 完成!常用命令:"
 echo "   实时日志: docker compose logs -f"
 echo "   停止:     docker compose down"
-echo "   在 Telegram 里给你的 bot 发 /start 打开管理面板。"
+echo "   在 Telegram 给 bot 发 /start 打开面板,/id 获取自己的 user id。"

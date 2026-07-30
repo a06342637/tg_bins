@@ -1,0 +1,10 @@
+services:
+  bot:
+    build: .
+    container_name: tg_bins
+    restart: unless-stopped
+    volumes:
+      # 挂载源码目录:让 config.yaml 的修改、以及『更新』按钮的 git pull 无需重建镜像即可生效。
+      # 改完代码/配置后点『重启』(或 docker compose restart)即应用。
+      - ./:/app
+    # 说明:改了 requirements.txt(依赖)后需重建镜像:docker compose up -d --build

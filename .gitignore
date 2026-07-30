@@ -1,0 +1,14 @@
+# 密钥文件,绝不提交
+config.yaml
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 日志/杂项
+*.log
+.DS_Store

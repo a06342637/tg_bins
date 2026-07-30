@@ -1,0 +1,20 @@
+# 复制为 config.yaml 后填写(或直接运行 setup.sh 自动生成)。
+# config.yaml 含密钥,已被 .gitignore 排除,请勿提交到公开仓库。
+
+telegram:
+  bot_token: "123456789:ABCdefGhIJKlmnOPQrsTUVwxyz"   # BotFather 给的 token
+  admin_ids:                                            # 只有这些人能查询和操作;其他人一律拒绝
+    - 123456789
+
+handyapi:
+  accounts:                                             # 多账号轮询:一个限流会自动切下一个
+    - name: "acct1"
+      frontend_key: "PUB-xxxxxxxxxxxxxxxx"              # 前端 Publishable key
+      backend_key: "HAS-xxxxxxxxxxxxxxxx"               # 后端 Secret key(查询优先用它)
+    - name: "acct2"
+      frontend_key: "PUB-yyyyyyyyyyyyyyyy"
+      backend_key: "HAS-yyyyyyyyyyyyyyyy"
+
+settings:
+  log_lines: 20                                        # 『日志』按钮显示最近多少条
+  # local_db: "data/bin-list-data.csv"                 # 本地 BIN 库路径(默认已内置,一般无需改)

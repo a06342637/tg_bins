@@ -5,7 +5,7 @@ render_multi() 支持一个或两个结果(HandyAPI 与本地库不一致时并�
 
 中文块的卡组织/类型/等级/国家走 zh.py 的中文对照;发卡行是银行专有名称,无可靠中文源,保留原文。
 """
-from zh import country_zh, flag, scheme_zh, tier_zh, type_zh
+from zh import country_zh, flag, issuer_zh, scheme_zh, tier_zh, type_zh
 
 _PREPAID_WARN = "⚠️⚠️⚠️ 预付卡 PREPAID CARD ⚠️⚠️⚠️"
 
@@ -35,7 +35,7 @@ def render_result(u, with_warning=True):
         f"卡组织  : {scheme_zh(scheme)}\n"
         f"类型    : {type_zh(ctype)}\n"
         f"等级    : {tier_zh(tier)}\n"
-        f"发卡行  : {issuer}\n"
+        f"发卡行  : {issuer_zh(issuer)}\n"
         f"国家    : {country_zh(a2, cname)} {fl} ({a2})"
     )
     out = en + zh

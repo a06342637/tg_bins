@@ -38,6 +38,18 @@ from zh import country_label
 
 logger = logging.getLogger("tgbins")
 
+
+def _read_version(path="VERSION"):
+    """读取版本号(VERSION 文件),读不到返回“未知”。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read().strip() or "未知"
+    except Exception:  # noqa: BLE001
+        return "未知"
+
+
+APP_VERSION = _read_version()
+
 cfg = load_config()
 POOL = KeyPool(cfg["handyapi"]["accounts"])
 CONFIG_ADMIN_IDS = list(cfg["telegram"]["admin_ids"])
@@ -110,6 +122,17 @@ def main_panel():
     ])
 
 
+def panel_title():
+    return f"🛠 管理面板 · v{APP_VERSION}:"
+
+
+def update_confirm_markup():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ 确认更新", callback_data="update_go"),
+         InlineKeyboardButton("❌ 取消", callback_data="menu")],
+    ])
+
+
 def users_panel():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ 添加用户", callback_data="u_add"),
@@ -161,11 +184,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return  # 非授权静默
     if is_super(uid):
         await update.message.reply_text(
-            "✅ 已就绪(超级管理员)。\n直接发送卡号或 BIN 数字即可查询。\n\n🛠 管理面板:",
+            f"✅ 已就绪(超级管理员) · v{APP_VERSION}。\n直接发送卡号或 BIN 数字即可查询。\n\n{panel_title()}",
             reply_markup=main_panel(),
         )
     else:
-        await update.message.reply_text("✅ 已就绪。直接发送卡号或 BIN 数字即可查询。")
+        await update.message.reply_text(f"✅ 已就绪 · v{APP_VERSION}。直接发送卡号或 BIN 数字即可查询。")
 
 
 async def cmd_adduser(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -326,7 +349,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 导航
     if data == "menu":
-        await _safe_edit(q, "🛠 管理面板:", main_panel())
+        await _safe_edit(q, panel_title(), main_panel())
     elif data == "users":
         await _safe_edit(q, "👥 用户管理:", users_panel())
     elif data == "settings":
@@ -337,7 +360,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.reply_text(_history_text()[:4000])
     elif data == "status":
         extra = "\n\n🧾 最近运行日志:\n" + recent_logs(8)
-        await q.message.reply_text((POOL.status_text() + extra)[:4000])
+        head = f"🤖 版本 v{APP_VERSION}\n\n"
+        await q.message.reply_text((head + POOL.status_text() + extra)[:4000])
     elif data == "u_list":
         await q.message.reply_text(_users_text())
 
@@ -372,37 +396,90 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info("收到重启指令,进程退出以触发容器重启")
         os._exit(0)
     elif data == "update":
-        _log_op(q.from_user.id, "update", "")
-        await q.message.reply_text("🔄 正在拉取更新…")
+        # 第一步:git fetch 后比对本地/远程,展示 当前->最新 版本供确认
+        await q.message.reply_text("🔍 正在检查更新…")
         try:
             subprocess.run(
                 ["git", "config", "--global", "--add", "safe.directory", "/app"],
                 capture_output=True, text=True, timeout=30,
             )
+            fetched = subprocess.run(
+                ["git", "fetch", "origin", "main"],
+                cwd="/app", capture_output=True, text=True, timeout=60,
+            )
+            if fetched.returncode != 0:
+                await q.message.reply_text(f"❌ 检查更新失败:\n{(fetched.stderr or '(无输出)')[-800:]}")
+                return
+            local_head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd="/app",
+                capture_output=True, text=True, timeout=30,
+            ).stdout.strip()
+            remote_head = subprocess.run(
+                ["git", "rev-parse", "origin/main"], cwd="/app",
+                capture_output=True, text=True, timeout=30,
+            ).stdout.strip()
+            remote_ver = subprocess.run(
+                ["git", "show", "origin/main:VERSION"], cwd="/app",
+                capture_output=True, text=True, timeout=30,
+            ).stdout.strip() or "未知"
+            if local_head and local_head == remote_head:
+                await q.message.reply_text(f"✅ 已经是最新版本 v{APP_VERSION},无需更新。")
+                return
+            context.user_data["update_to"] = remote_ver
+            await q.message.reply_text(
+                f"🆕 发现新版本:\n\n当前版本:v{APP_VERSION}\n最新版本:v{remote_ver}\n\n"
+                f"确认更新?(将拉取代码并重启,重启完成后我会主动通知你)",
+                reply_markup=update_confirm_markup(),
+            )
+        except Exception as e:  # noqa: BLE001
+            await q.message.reply_text(f"❌ 检查更新失败:{e}")
+    elif data == "update_go":
+        # 第二步:确认后 git pull 并重启;先记录待通知(chat + 旧版本),重启后由 _post_init 推送“更新完成”
+        remote_ver = context.user_data.pop("update_to", "未知")
+        _log_op(q.from_user.id, "update", f"v{APP_VERSION}->v{remote_ver}")
+        STORAGE.set_meta("pending_notify_chat", str(q.message.chat_id))
+        STORAGE.set_meta("pending_notify_from", APP_VERSION)
+        await q.message.reply_text("🔄 正在拉取更新…")
+        try:
             r = subprocess.run(
                 ["git", "pull", "--ff-only"],
                 cwd="/app", capture_output=True, text=True, timeout=120,
             )
             out = ((r.stdout or "") + (r.stderr or "")).strip()
-            # 拉取失败(冲突/网络/本地有改动等):绝不重启,把原因发出来,避免“假装更新了”
             if r.returncode != 0:
+                STORAGE.set_meta("pending_notify_chat", "")  # 更新失败,撤销待通知
                 logger.warning("git pull 失败(returncode=%s),不重启", r.returncode)
                 await q.message.reply_text(
                     f"❌ 更新失败,未重启(git pull 返回码 {r.returncode}):\n{out[-1400:] or '(无输出)'}"
                 )
                 return
-            # 没有新提交:无需重启,省一次中断
-            if "Already up to date" in out or "已经是最新" in out:
-                await q.message.reply_text(f"✅ 已经是最新版本,无需更新(未重启)。\n\n{out[-400:]}")
-                return
             note = ""
             if "requirements.txt" in out:
                 note = "\n\n⚠️ 本次更新改动了依赖,重启后如异常,请在服务器执行:\n  docker compose up -d --build"
-            await q.message.reply_text(f"✅ git pull 成功:\n{out[-1400:]}{note}\n\n♻️ 即将重启以应用更新…")
-            logger.info("收到更新指令,git pull 完成,进程退出")
+            await q.message.reply_text(
+                f"✅ 拉取成功:\n{out[-1200:]}{note}\n\n♻️ 即将重启…完成后我会主动发消息通知你。"
+            )
+            logger.info("更新 v%s -> v%s,git pull 完成,进程退出重启", APP_VERSION, remote_ver)
             os._exit(0)
         except Exception as e:  # noqa: BLE001
+            STORAGE.set_meta("pending_notify_chat", "")
             await q.message.reply_text(f"❌ 更新失败:{e}")
+
+
+async def _post_init(app):
+    """启动后回调:若上次是通过『更新』重启的,主动向触发者推送“更新完成 + 当前版本”。"""
+    chat = STORAGE.get_meta("pending_notify_chat")
+    if chat and chat.lstrip("-").isdigit():
+        frm = STORAGE.get_meta("pending_notify_from") or "?"
+        try:
+            await app.bot.send_message(
+                int(chat),
+                f"✅ 更新完成!\n版本:v{frm} → v{APP_VERSION}\n已重启并生效,可继续查询。",
+            )
+            logger.info("已推送更新完成通知到 chat %s(v%s -> v%s)", chat, frm, APP_VERSION)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("推送更新完成通知失败:%s", e)
+        STORAGE.set_meta("pending_notify_chat", "")
 
 
 def main():
@@ -421,7 +498,7 @@ def main():
     localdb = try_load(LOCAL_DB_PATH)
     LOOKUP = BinLookup(POOL, localdb)
 
-    app = Application.builder().token(cfg["telegram"]["bot_token"]).build()
+    app = Application.builder().token(cfg["telegram"]["bot_token"]).post_init(_post_init).build()
     app.add_handler(CommandHandler("id", cmd_id))
     app.add_handler(CommandHandler(["start", "menu", "panel"], cmd_start))
     app.add_handler(CommandHandler("adduser", cmd_adduser))
@@ -430,8 +507,8 @@ def main():
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     logger.info(
-        "Bot 启动:超管=%s,授权用户共 %d,HandyAPI 账号 %d,本地库=%s,日志保留 %d 天",
-        SUPER_ADMIN, len(AUTHORIZED), len(POOL.accounts),
+        "Bot 启动:v%s,超管=%s,授权用户共 %d,HandyAPI 账号 %d,本地库=%s,日志保留 %d 天",
+        APP_VERSION, SUPER_ADMIN, len(AUTHORIZED), len(POOL.accounts),
         "已加载" if localdb else "未加载", LOG_RETENTION_DAYS,
     )
     app.run_polling(allowed_updates=Update.ALL_TYPES)

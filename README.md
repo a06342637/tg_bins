@@ -52,7 +52,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/a06342637/tg_bins/main/insta
 ## 管理按钮说明
 
 - **重启**:进程退出,由 `restart: unless-stopped` 自动拉起(几秒恢复)。
-- **更新**:容器内 `git pull` 拉取最新代码后自动重启;若本次改了 `requirements.txt`(依赖),会提示你在服务器执行 `docker compose up -d --build`。
+- **更新**:点后先 `git fetch` 比对版本,显示「当前 vX → 最新 vY」并让你**确认更新 / 取消**;确认后才 `git pull` 并自动重启,**重启完成会主动给你发一条「更新完成 + 版本」消息**。若本次改了 `requirements.txt`(依赖),会提示你在服务器执行 `docker compose up -d --build`;拉取失败则不会重启、直接报错。
 - **历史**:操作日志存 SQLite,展示最近 `log_lines` 条;超过「设置」里的保留天数自动清理(启动时 + 每 6 小时惰性清理一次)。
 - **状态**:各 HandyAPI 账号可用/限流情况,附最近几条运行日志(完整运行日志用 `docker compose logs -f`)。
 

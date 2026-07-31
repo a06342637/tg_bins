@@ -8,7 +8,8 @@
 查询:直接发数字。≥6 位取前 6 位走 HandyAPI(三账号轮询),同时比对本地库,不一致则两个都发;
 4–5 位走本地库;HandyAPI 全部限流时本地库兜底。
 
-管理面板(仅超管)全部按钮操作:更新 / 重启 / 用户增删查 / 操作历史 / 设置(日志保留天数)/ 状态。
+管理面板(仅超管)全部按钮操作:更新 / 重启 / 用户增删查改(按钮列表,支持 @用户名 反查 id)/
+操作历史 / 设置(日志保留天数)/ 状态。
 操作历史与查询记录存 SQLite,超过保留天数自动清理。
 """
 import logging
@@ -69,10 +70,13 @@ _last_purge = 0.0           # 惰性清理时间戳
 # 整条消息只由数字和常见卡号分隔符组成时,才当作 BIN 查询
 DIGITS_ONLY = re.compile(r"^[\d\s\-]+$")
 INT_RE = re.compile(r"^-?\d+$")
+# Telegram 用户名:5–32 位字母/数字/下划线,字母开头,可带 @ 前缀
+USERNAME_RE = re.compile(r"^@?([A-Za-z][A-Za-z0-9_]{4,31})$")
 
 ACTION_ZH = {
     "query": "查询", "adduser": "加用户", "deluser": "删用户",
     "restart": "重启", "update": "更新", "setdays": "改保留天数",
+    "remark": "改备注",
 }
 
 
@@ -92,6 +96,40 @@ def _looks_like_uid(s):
 def _log_op(uid, action, detail=""):
     if STORAGE:
         STORAGE.log_op(uid, action, detail)
+
+
+def _record_seen(update: Update):
+    """记录来访用户的 username→id 映射,供发用户名反查 id 使用(任何人,包括未授权)。"""
+    u = update.effective_user
+    if u and STORAGE:
+        STORAGE.upsert_seen(u.id, u.username, u.first_name)
+
+
+def _user_label(uid):
+    """列表按钮上的展示:id + 备注/用户名(有则显示)。"""
+    row = STORAGE.get_user(uid)
+    remark = row[3] if row else None
+    username, first_name = STORAGE.get_seen(uid)
+    extra = remark or (f"@{username}" if username else first_name)
+    return f"{uid} · {extra}" if extra else str(uid)
+
+
+async def resolve_username(bot, name):
+    """用户名 → user_id:先查本地 seen_users,再试 get_chat 兜底;查不到返回 None。
+
+    注:Bot API 无法查询任意用户的用户名,只有和本 bot 交互过的用户才能从本地表查到。
+    """
+    uid = STORAGE.id_by_username(name)
+    if uid:
+        return uid
+    try:
+        chat = await bot.get_chat(f"@{name}")
+        if chat.type == "private":
+            STORAGE.upsert_seen(chat.id, chat.username, chat.first_name)
+            return chat.id
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
 
 def maybe_purge():
@@ -134,20 +172,47 @@ def update_confirm_markup():
 
 
 def users_panel():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ 添加用户", callback_data="u_add"),
-         InlineKeyboardButton("➖ 删除用户", callback_data="u_del")],
-        [InlineKeyboardButton("📋 用户列表", callback_data="u_list")],
-        [InlineKeyboardButton("⬅️ 返回", callback_data="menu")],
-    ])
-
-
-def del_users_markup():
-    """动态授权用户,每人一个删除按钮。"""
-    rows = [[InlineKeyboardButton(f"❌ {uid}", callback_data=f"udel:{uid}")]
+    """用户管理:动态授权用户每人一个按钮(点进详情可备注/删除)。"""
+    rows = [[InlineKeyboardButton(f"👤 {_user_label(uid)}", callback_data=f"uinfo:{uid}")]
             for uid in STORAGE.list_users()]
-    rows.append([InlineKeyboardButton("⬅️ 返回", callback_data="users")])
+    rows.append([InlineKeyboardButton("➕ 添加用户", callback_data="u_add"),
+                 InlineKeyboardButton("⬅️ 返回", callback_data="menu")])
     return InlineKeyboardMarkup(rows)
+
+
+def users_panel_text():
+    cfg_others = [x for x in CONFIG_ADMIN_IDS if x != SUPER_ADMIN]
+    n = len(STORAGE.list_users())
+    return (
+        f"👥 用户管理\n\n👑 超级管理员:{SUPER_ADMIN}\n"
+        f"⚙️ 配置管理员:{', '.join(map(str, cfg_others)) or '(无)'}\n"
+        f"➕ 动态授权用户:{n} 人(点击查看/修改/删除)\n"
+        "添加时可发 user_id 或 @用户名(需对方与本 bot 交互过)。"
+    )
+
+
+def user_info_text(uid):
+    row = STORAGE.get_user(uid)
+    if not row:
+        return f"用户 {uid} 已不在授权列表。"
+    _, added_by, added_at, remark = row
+    username, first_name = STORAGE.get_seen(uid)
+    return (
+        f"👤 用户详情\n\n"
+        f"🆔 user_id:{uid}\n"
+        f"🔗 用户名:{'@' + username if username else '(未知)'}\n"
+        f"📛 昵称:{first_name or '(未知)'}\n"
+        f"📝 备注:{remark or '(无)'}\n"
+        f"🕐 添加于:{added_at or '?'}(by {added_by})"
+    )
+
+
+def user_info_markup(uid):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✏️ 改备注", callback_data=f"urmk:{uid}"),
+         InlineKeyboardButton("❌ 删除", callback_data=f"udel:{uid}")],
+        [InlineKeyboardButton("⬅️ 返回列表", callback_data="users")],
+    ])
 
 
 def settings_panel():
@@ -175,10 +240,12 @@ async def _safe_edit(q, text, markup=None):
 
 async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """任何人可用:返回自己的 user id。"""
+    _record_seen(update)
     await update.message.reply_text(f"你的 user id: {update.effective_user.id}")
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _record_seen(update)
     uid = update.effective_user.id
     if not is_authed(uid):
         return  # 非授权静默
@@ -194,10 +261,21 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_adduser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_super(update.effective_user.id):
         return
-    if not context.args or not _looks_like_uid(context.args[0]):
-        await update.message.reply_text("用法:/adduser <5–12 位数字 user_id>")
+    arg = context.args[0] if context.args else ""
+    if _looks_like_uid(arg):
+        await _do_add_user(update.effective_user.id, int(arg), update.message.reply_text)
         return
-    await _do_add_user(update.effective_user.id, int(context.args[0]), update.message.reply_text)
+    m = USERNAME_RE.match(arg)
+    if m:
+        target = await resolve_username(context.bot, m.group(1))
+        if target is None:
+            await update.message.reply_text(
+                f"🤷 查不到 @{m.group(1)} 的 user_id(对方可能从未与本 bot 交互),未添加。"
+            )
+            return
+        await _do_add_user(update.effective_user.id, target, update.message.reply_text)
+        return
+    await update.message.reply_text("用法:/adduser <5–12 位数字 user_id 或 @用户名>")
 
 
 async def cmd_deluser(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -253,6 +331,7 @@ async def _do_del_user(operator, target, reply):
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
+    _record_seen(update)
     uid = update.effective_user.id
     if not is_authed(uid):
         return  # 非授权完全静默
@@ -265,12 +344,31 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         awaiting = context.user_data.get("await")
         if awaiting == "add_user":
             context.user_data.pop("await", None)
-            if not _looks_like_uid(text):
+            m = USERNAME_RE.match(text)
+            if _looks_like_uid(text):
+                await _do_add_user(uid, int(text), update.message.reply_text)
+            elif m:
+                target = await resolve_username(context.bot, m.group(1))
+                if target is None:
+                    await update.message.reply_text(
+                        f"🤷 查不到 @{m.group(1)} 的 user_id(对方可能从未与本 bot 交互),未添加。"
+                    )
+                    return
+                await _do_add_user(uid, target, update.message.reply_text)
+            else:
                 await update.message.reply_text(
-                    "已取消:这不像一个 user_id(应为 5–12 位数字)。要查卡号请直接发卡号。"
+                    "已取消:请发送 5–12 位数字 user_id 或 @用户名。要查卡号请直接发卡号。"
                 )
-                return
-            await _do_add_user(uid, int(text), update.message.reply_text)
+            return
+        if awaiting and awaiting.startswith("remark:"):
+            context.user_data.pop("await", None)
+            target = int(awaiting.split(":", 1)[1])
+            remark = text[:50]
+            if STORAGE.set_remark(target, remark):
+                _log_op(uid, "remark", f"{target}={remark}")
+                await update.message.reply_text(f"✅ 已把用户 {target} 的备注设为:{remark}")
+            else:
+                await update.message.reply_text(f"{target} 不在授权列表,备注未保存。")
             return
         if awaiting == "set_days":
             context.user_data.pop("await", None)
@@ -279,6 +377,16 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             _set_retention(int(text), uid)
             await update.message.reply_text(f"✅ 日志保留天数已设为 {LOG_RETENTION_DAYS} 天。")
+            return
+
+        # 超管直接发 @用户名:反查 user_id(查不到即提示未找到)
+        if text.startswith("@") and USERNAME_RE.match(text):
+            name = USERNAME_RE.match(text).group(1)
+            target = await resolve_username(context.bot, name)
+            if target is None:
+                await update.message.reply_text(f"🤷 未找到 @{name} 的 user_id(对方可能从未与本 bot 交互)。")
+            else:
+                await update.message.reply_text(f"🔎 @{name} 的 user_id:{target}")
             return
 
     # BIN 查询
@@ -340,6 +448,7 @@ def _history_text():
 
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
+    _record_seen(update)
     if not is_super(q.from_user.id):
         await q.answer()  # 静默关闭 loading
         return
@@ -351,7 +460,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "menu":
         await _safe_edit(q, panel_title(), main_panel())
     elif data == "users":
-        await _safe_edit(q, "👥 用户管理:", users_panel())
+        await _safe_edit(q, users_panel_text(), users_panel())
     elif data == "settings":
         await _safe_edit(q, settings_text(), settings_panel())
 
@@ -362,23 +471,25 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         extra = "\n\n🧾 最近运行日志:\n" + recent_logs(8)
         head = f"🤖 版本 v{APP_VERSION}\n\n"
         await q.message.reply_text((head + POOL.status_text() + extra)[:4000])
-    elif data == "u_list":
-        await q.message.reply_text(_users_text())
 
-    # 用户增删
+    # 用户增删查改
     elif data == "u_add":
         context.user_data["await"] = "add_user"
-        await q.message.reply_text("➕ 请发送要授权的 user_id(纯数字)。发送其它内容即取消。")
-    elif data == "u_del":
-        users = STORAGE.list_users()
-        if not users:
-            await q.message.reply_text("当前没有动态授权用户(配置文件里的管理员需改 config.yaml)。")
-        else:
-            await q.message.reply_text("点击移除动态授权用户:", reply_markup=del_users_markup())
+        await q.message.reply_text(
+            "➕ 请发送要授权的 user_id(纯数字)或 @用户名。发送其它内容即取消。\n"
+            "(用用户名添加时,对方需和本 bot 交互过,否则查不到 id)"
+        )
+    elif data.startswith("uinfo:"):
+        uid_t = int(data.split(":", 1)[1])
+        await _safe_edit(q, user_info_text(uid_t), user_info_markup(uid_t))
+    elif data.startswith("urmk:"):
+        uid_t = int(data.split(":", 1)[1])
+        context.user_data["await"] = f"remark:{uid_t}"
+        await q.message.reply_text(f"✏️ 请发送用户 {uid_t} 的新备注(一行文字)。")
     elif data.startswith("udel:"):
         target = int(data.split(":", 1)[1])
         await _do_del_user(q.from_user.id, target, q.message.reply_text)
-        await _safe_edit(q, "点击移除动态授权用户:", del_users_markup())
+        await _safe_edit(q, users_panel_text(), users_panel())
 
     # 设置日志保留天数
     elif data == "sd:custom":

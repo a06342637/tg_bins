@@ -10,6 +10,10 @@ echo "======================================"
 echo
 
 read -rp "1) Telegram Bot Token (BotFather 提供): " BOT_TOKEN
+echo "   可选:my.telegram.org 申请的 api_id/api_hash(用于 @用户名 反查任意用户 id,直接回车跳过)"
+read -rp "   api_id(纯数字,可留空): " API_ID
+API_HASH=""
+[ -n "$API_ID" ] && read -rp "   api_hash: " API_HASH
 echo "   管理员 user id:第一个是【超级管理员】(可增删用户 / 更新 / 重启 / 看日志),"
 echo "   其余仅可查询卡号。不知道 id?先把 bot 跑起来给它发 /id 获取。"
 read -rp "   多个用英文逗号分隔: " ADMIN_RAW
@@ -37,6 +41,10 @@ LOG_LINES="${LOG_LINES:-20}"
 {
   echo "telegram:"
   echo "  bot_token: \"$BOT_TOKEN\""
+  if [ -n "$API_ID" ]; then
+    echo "  api_id: $API_ID          # MTProto 用户名反查"
+    echo "  api_hash: \"$API_HASH\""
+  fi
   echo "  admin_ids:            # 第一个是超级管理员(最高权限),其余仅可查询"
   IFS=',' read -ra IDS <<< "$ADMIN_RAW"
   for id in "${IDS[@]}"; do

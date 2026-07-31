@@ -43,7 +43,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/a06342637/tg_bins/main/insta
   - ⚙️ **设置**:日志保留天数(7 / 30 / 90 / 自定义),超期自动清理
   - ℹ️ 状态:各账号可用/限流情况 + 最近运行日志
   - 命令仍可用:`/adduser <id|@用户名>` · `/deluser <id>` · `/users`
-  - 超管直接发 `@用户名` 可反查 user_id(仅限与本 bot 交互过的用户,查不到会提示未找到)
+  - 超管直接发 `@用户名` 可反查 user_id。配置了 `telegram.api_id/api_hash`(在 [my.telegram.org](https://my.telegram.org) → API development tools 免费申请)时走 MTProto,可查**任意公开用户名**;未配置时只能查到和本 bot 交互过的用户。查不到会提示未找到。
   - 授权用户、操作历史、设置都存 SQLite(`data/tg_bins.db`),重启后仍在。
 
 ## 配置(后期修改)

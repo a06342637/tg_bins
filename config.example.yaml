@@ -3,6 +3,10 @@
 
 telegram:
   bot_token: "123456789:ABCdefGhIJKlmnOPQrsTUVwxyz"   # BotFather 给的 token
+  # 可选:在 https://my.telegram.org -> API development tools 申请,
+  # 配置后可用 @用户名 反查任意公开用户的 user_id(不配则只能查到和 bot 交互过的用户)
+  # api_id: 1234567
+  # api_hash: "0123456789abcdef0123456789abcdef"
   admin_ids:                                            # 第一个是超级管理员(最高权限),其余仅可查询;其他人静默
     - 123456789      # 超级管理员:查询 + 更新/重启/历史/设置 + 增删用户
     - 987654321      # 授权用户:只能查卡号

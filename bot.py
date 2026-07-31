@@ -33,6 +33,7 @@ from handyapi import KeyPool
 from localbin import try_load
 from logbuffer import recent_logs, setup_logging
 from lookup import BinLookup
+from mtproto import UsernameResolver
 from render import render_multi
 from storage import Storage
 from zh import country_label
@@ -59,6 +60,10 @@ LOG_LINES = int(cfg["settings"]["log_lines"])
 LOCAL_DB_PATH = cfg["settings"].get("local_db") or "data/bin-list-data.csv"
 DB_PATH = cfg["settings"].get("db_path") or "data/tg_bins.db"
 DEFAULT_RETENTION = int(cfg["settings"].get("log_retention_days", 30))
+RESOLVER = UsernameResolver(
+    cfg["telegram"].get("api_id"), cfg["telegram"].get("api_hash"),
+    cfg["telegram"]["bot_token"], session_path="data/mtproto",
+)
 
 # 以下在 main() 里初始化
 STORAGE = None
@@ -114,10 +119,21 @@ def _user_label(uid):
     return f"{uid} · {extra}" if extra else str(uid)
 
 
-async def resolve_username(bot, name):
-    """用户名 → user_id:先查本地 seen_users,再试 get_chat 兜底;查不到返回 None。
+def _notfound_text(name):
+    if RESOLVER.enabled:
+        return f"🤷 查不到 @{name} 的 user_id(用户名不存在,或对方隐藏了用户名)。"
+    return (
+        f"🤷 查不到 @{name} 的 user_id(对方未与本 bot 交互过)。\n"
+        "提示:在 config.yaml 配置 telegram.api_id / api_hash(my.telegram.org 申请)"
+        "后可反查任意公开用户名,详见 README。"
+    )
 
-    注:Bot API 无法查询任意用户的用户名,只有和本 bot 交互过的用户才能从本地表查到。
+
+async def resolve_username(bot, name):
+    """用户名 → user_id。三级兜底,查不到返回 None:
+    1. 本地 seen_users(和 bot 交互过的用户);
+    2. Bot API get_chat(基本只对频道/群有效,顺手一试);
+    3. MTProto contacts.resolveUsername(需配置 api_id/api_hash,可查任意公开用户名)。
     """
     uid = STORAGE.id_by_username(name)
     if uid:
@@ -129,6 +145,11 @@ async def resolve_username(bot, name):
             return chat.id
     except Exception:  # noqa: BLE001
         pass
+    got = await RESOLVER.resolve(name)
+    if got:
+        uid, username, first_name = got
+        STORAGE.upsert_seen(uid, username, first_name)
+        return uid
     return None
 
 
@@ -187,7 +208,7 @@ def users_panel_text():
         f"👥 用户管理\n\n👑 超级管理员:{SUPER_ADMIN}\n"
         f"⚙️ 配置管理员:{', '.join(map(str, cfg_others)) or '(无)'}\n"
         f"➕ 动态授权用户:{n} 人(点击查看/修改/删除)\n"
-        "添加时可发 user_id 或 @用户名(需对方与本 bot 交互过)。"
+        "添加时可发 user_id 或 @用户名(自动反查 id)。"
     )
 
 
@@ -269,9 +290,7 @@ async def cmd_adduser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if m:
         target = await resolve_username(context.bot, m.group(1))
         if target is None:
-            await update.message.reply_text(
-                f"🤷 查不到 @{m.group(1)} 的 user_id(对方可能从未与本 bot 交互),未添加。"
-            )
+            await update.message.reply_text(f"{_notfound_text(m.group(1))}\n未添加。")
             return
         await _do_add_user(update.effective_user.id, target, update.message.reply_text)
         return
@@ -350,9 +369,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elif m:
                 target = await resolve_username(context.bot, m.group(1))
                 if target is None:
-                    await update.message.reply_text(
-                        f"🤷 查不到 @{m.group(1)} 的 user_id(对方可能从未与本 bot 交互),未添加。"
-                    )
+                    await update.message.reply_text(f"{_notfound_text(m.group(1))}\n未添加。")
                     return
                 await _do_add_user(uid, target, update.message.reply_text)
             else:
@@ -384,7 +401,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             name = USERNAME_RE.match(text).group(1)
             target = await resolve_username(context.bot, name)
             if target is None:
-                await update.message.reply_text(f"🤷 未找到 @{name} 的 user_id(对方可能从未与本 bot 交互)。")
+                await update.message.reply_text(_notfound_text(name))
             else:
                 await update.message.reply_text(f"🔎 @{name} 的 user_id:{target}")
             return
@@ -475,9 +492,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 用户增删查改
     elif data == "u_add":
         context.user_data["await"] = "add_user"
+        hint = "" if RESOLVER.enabled else "\n(未配置 api_id/api_hash,用户名只能查到与本 bot 交互过的用户)"
         await q.message.reply_text(
-            "➕ 请发送要授权的 user_id(纯数字)或 @用户名。发送其它内容即取消。\n"
-            "(用用户名添加时,对方需和本 bot 交互过,否则查不到 id)"
+            f"➕ 请发送要授权的 user_id(纯数字)或 @用户名。发送其它内容即取消。{hint}"
         )
     elif data.startswith("uinfo:"):
         uid_t = int(data.split(":", 1)[1])

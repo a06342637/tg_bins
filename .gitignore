@@ -15,3 +15,7 @@ venv/
 # 日志/杂项
 *.log
 .DS_Store
+
+# MTProto 会话文件(含凭据,勿提交)
+*.session
+*.session-journal

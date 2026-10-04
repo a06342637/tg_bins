@@ -18,7 +18,7 @@ import re
 import subprocess
 import time
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity, Update
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -283,7 +283,20 @@ async def on_generate(q):
         return
     await q.answer()
     numbers = generate_numbers(parts[2], CARD_GENERATION_COUNT)
-    await q.message.reply_text("\n".join(numbers))
+    entities = []
+    offset = 0
+    for number in numbers:
+        entities.append(MessageEntity(MessageEntity.CODE, offset, len(number)))
+        offset += len(number) + 1  # ASCII numbers/newlines have identical UTF-16 offsets.
+    # api_kwargs keeps copy_text compatible with existing python-telegram-bot 21.6 installs.
+    copy_buttons = [InlineKeyboardButton(
+        f"📋 复制第 {index} 个", api_kwargs={"copy_text": {"text": number}},
+    ) for index, number in enumerate(numbers, 1)]
+    rows = [copy_buttons[i:i + 3] for i in range(0, len(copy_buttons), 3)]
+    rows.append([InlineKeyboardButton("💳 继续生成", callback_data=q.data)])
+    await q.message.reply_text(
+        "\n".join(numbers), entities=entities, reply_markup=InlineKeyboardMarkup(rows),
+    )
     _log_op(q.from_user.id, "generate", f"{parts[2]} ×{len(numbers)}")
 
 

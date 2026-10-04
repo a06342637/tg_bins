@@ -76,6 +76,39 @@ class BotGenerationTests(unittest.IsolatedAsyncioTestCase):
         update.callback_query.message.reply_text.assert_not_awaited()
         self.assertTrue(update.callback_query.answer.call_args.kwargs["show_alert"])
 
+    async def test_each_number_is_code_and_has_exact_copy_button(self):
+        for count in (1, 3, 20):
+            bot.CARD_GENERATION_COUNT = count
+            update = callback("gen:20002:442742")
+            await bot.on_button(update, self.context)
+            call = update.callback_query.message.reply_text.call_args
+            text = call.args[0]
+            numbers = text.splitlines()
+            entities = call.kwargs["entities"]
+            self.assertEqual(len(entities), count)
+            for entity, number in zip(entities, numbers):
+                self.assertEqual(entity.type, "code")
+                self.assertEqual(text[entity.offset:entity.offset + entity.length], number)
+            keyboard = call.kwargs["reply_markup"].to_dict()["inline_keyboard"]
+            copies = [button for row in keyboard[:-1] for button in row]
+            self.assertEqual([b["copy_text"]["text"] for b in copies], numbers)
+            self.assertTrue(all("callback_data" not in b for b in copies))
+            self.assertEqual(keyboard[-1][0]["callback_data"], "gen:20002:442742")
+
+    async def test_continue_generation_uses_current_settings_without_lookup(self):
+        update = callback("gen:20002:4427")
+        for count in (3, 5, 2):
+            bot._set_card_count(count, 10001)
+            await bot.on_button(update, self.context)
+            call = update.callback_query.message.reply_text.call_args
+            self.assertEqual(len(call.args[0].splitlines()), count)
+            next_button = call.kwargs["reply_markup"].inline_keyboard[-1][0]
+            update = callback(next_button.callback_data)
+        bot.LOOKUP.query.assert_not_awaited()
+        bot._set_card_enabled(False, 10001)
+        await bot.on_button(update, self.context)
+        update.callback_query.message.reply_text.assert_not_awaited()
+
     async def test_only_authorized_query_owner_can_generate(self):
         for data, uid in (("gen:20002:442742", 99999), ("gen:20002:442742", 30003),
                           ("gen:20002:123", 20002), ("gen:20002:442742:bad", 20002)):

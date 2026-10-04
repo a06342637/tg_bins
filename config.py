@@ -25,6 +25,12 @@ def load_config():
 
     settings = cfg.setdefault("settings", {})
     settings.setdefault("log_lines", 20)
+    settings.setdefault("card_generation_enabled", True)
+    settings.setdefault("card_generation_count", 3)
+    if type(settings["card_generation_enabled"]) is not bool:
+        raise ValueError("settings.card_generation_enabled 必须是 true 或 false")
+    if type(settings["card_generation_count"]) is not int or not 1 <= settings["card_generation_count"] <= 20:
+        raise ValueError("settings.card_generation_count 必须是 1–20 的整数")
     settings.setdefault("log_retention_days", 30)  # 操作历史保留天数,超期自动清理(TG 内可改)
     # admin_ids 统一成 int 集合
     tg["admin_ids"] = [int(x) for x in tg["admin_ids"]]

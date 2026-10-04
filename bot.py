@@ -29,6 +29,7 @@ from telegram.ext import (
 )
 
 from config import load_config
+from cardgen import MAX_COUNT, PREFIX_RE, generate_numbers
 from handyapi import KeyPool
 from localbin import try_load
 from logbuffer import recent_logs, setup_logging
@@ -70,6 +71,8 @@ STORAGE = None
 LOOKUP = None
 AUTHORIZED = set()          # 可查询的用户集合 = 配置管理员 ∪ 动态授权用户
 LOG_RETENTION_DAYS = DEFAULT_RETENTION
+CARD_GENERATION_ENABLED = cfg["settings"]["card_generation_enabled"]
+CARD_GENERATION_COUNT = cfg["settings"]["card_generation_count"]
 _last_purge = 0.0           # 惰性清理时间戳
 
 # 整条消息只由数字和常见卡号分隔符组成时,才当作 BIN 查询
@@ -82,6 +85,7 @@ ACTION_ZH = {
     "query": "查询", "adduser": "加用户", "deluser": "删用户",
     "restart": "重启", "update": "更新", "setdays": "改保留天数",
     "remark": "改备注",
+    "generate": "生成号码", "card_enabled": "生成开关", "card_count": "生成数量",
 }
 
 
@@ -238,16 +242,49 @@ def user_info_markup(uid):
 
 def settings_panel():
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            "🔴 关闭生成虚拟卡" if CARD_GENERATION_ENABLED else "🟢 开启生成虚拟卡",
+            callback_data="cg:off" if CARD_GENERATION_ENABLED else "cg:on")],
+        [InlineKeyboardButton(f"🔢 生成数量: {CARD_GENERATION_COUNT}", callback_data="cg:count")],
         [InlineKeyboardButton("7 天", callback_data="sd:7"),
          InlineKeyboardButton("30 天", callback_data="sd:30"),
          InlineKeyboardButton("90 天", callback_data="sd:90")],
         [InlineKeyboardButton("✏️ 自定义", callback_data="sd:custom"),
          InlineKeyboardButton("⬅️ 返回", callback_data="menu")],
+        [InlineKeyboardButton("♻️ 重新启动服务", callback_data="restart")],
     ])
 
 
 def settings_text():
-    return f"⚙️ 设置\n\n📜 操作日志保留:当前 {LOG_RETENTION_DAYS} 天(超期自动清理)\n选择或自定义天数:"
+    state = "已开启" if CARD_GENERATION_ENABLED else "已关闭"
+    return (
+        f"⚙️ 设置\n\n💳 生成虚拟卡:{state}\n🔢 每次生成:{CARD_GENERATION_COUNT} 个\n"
+        f"📜 操作日志保留:当前 {LOG_RETENTION_DAYS} 天(超期自动清理)\n选择或自定义天数:"
+    )
+
+
+def generation_markup(prefix, uid):
+    if not CARD_GENERATION_ENABLED or not PREFIX_RE.fullmatch(prefix):
+        return None
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💳 生成虚拟卡", callback_data=f"gen:{uid}:{prefix}")],
+    ])
+
+
+async def on_generate(q):
+    """Generation is available to the authorized query owner, independently of admin actions."""
+    parts = (q.data or "").split(":")
+    if (not is_authed(q.from_user.id) or len(parts) != 3
+            or parts[1] != str(q.from_user.id) or not PREFIX_RE.fullmatch(parts[2])):
+        await q.answer("仅查询者本人可生成。", show_alert=True)
+        return
+    if not CARD_GENERATION_ENABLED:
+        await q.answer("生成虚拟卡功能已关闭。", show_alert=True)
+        return
+    await q.answer()
+    numbers = generate_numbers(parts[2], CARD_GENERATION_COUNT)
+    await q.message.reply_text("\n".join(numbers))
+    _log_op(q.from_user.id, "generate", f"{parts[2]} ×{len(numbers)}")
 
 
 async def _safe_edit(q, text, markup=None):
@@ -271,6 +308,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authed(uid):
         return  # 非授权静默
     if is_super(uid):
+        context.user_data.pop("await", None)
         await update.message.reply_text(
             f"✅ 已就绪(超级管理员) · v{APP_VERSION}。\n直接发送卡号或 BIN 数字即可查询。\n\n{panel_title()}",
             reply_markup=main_panel(),
@@ -361,6 +399,14 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 超管处于按钮触发的“等待输入”状态时,优先按状态处理
     if is_super(uid):
         awaiting = context.user_data.get("await")
+        if awaiting == "card_count":
+            context.user_data.pop("await", None)
+            if not re.fullmatch(r"[0-9]{1,2}", text) or not 1 <= int(text) <= MAX_COUNT:
+                await update.message.reply_text(f"已取消:请输入 1–{MAX_COUNT} 之间的生成数量。")
+                return
+            _set_card_count(int(text), uid)
+            await update.message.reply_text(settings_text(), reply_markup=settings_panel())
+            return
         if awaiting == "add_user":
             context.user_data.pop("await", None)
             m = USERNAME_RE.match(text)
@@ -410,7 +456,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not DIGITS_ONLY.match(text):
         return
     digits = re.sub(r"\D", "", text)
-    if len(digits) < 4:
+    if len(digits) < 4 or not re.fullmatch(r"[0-9]+", digits):
         return
 
     disp = digits[:6] if len(digits) >= 6 else digits
@@ -425,17 +471,42 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _log_op(uid, "query", detail)
 
     if err is None and results:
-        await msg.edit_text(render_multi(results))
+        response = render_multi(results)
     elif err == "WRONG_INPUT":
-        await msg.edit_text(f"⚠️ {disp} 不是有效 BIN(HandyAPI 需要至少 6 位数字)。")
+        response = f"⚠️ {disp} 不是有效 BIN(HandyAPI 需要至少 6 位数字)。"
     elif err == "NEED_LOCAL":
-        await msg.edit_text("⚠️ 4–5 位查询需要本地 BIN 库,但未加载(缺 data/bin-list-data.csv)。")
+        response = "⚠️ 4–5 位查询需要本地 BIN 库,但未加载(缺 data/bin-list-data.csv)。"
     elif err == "NOT_FOUND":
-        await msg.edit_text(f"🤷 未找到 BIN {disp} 的数据。")
+        response = f"🤷 未找到 BIN {disp} 的数据。"
     elif err == "RATE_LIMITED_ALL":
-        await msg.edit_text("⚠️ 所有 HandyAPI 账号都已限流,且本地库无此 BIN,请稍后再试。")
+        response = "⚠️ 所有 HandyAPI 账号都已限流,且本地库无此 BIN,请稍后再试。"
     else:
-        await msg.edit_text(f"❌ 查询失败:{err}")
+        response = f"❌ 查询失败:{err}"
+    await msg.edit_text(response, reply_markup=generation_markup(disp, uid))
+
+
+def _set_card_count(count, operator):
+    global CARD_GENERATION_COUNT
+    STORAGE.set_meta("card_generation_count", str(count))
+    CARD_GENERATION_COUNT = count
+    _log_op(operator, "card_count", str(count))
+
+
+def _set_card_enabled(enabled, operator):
+    global CARD_GENERATION_ENABLED
+    STORAGE.set_meta("card_generation_enabled", "1" if enabled else "0")
+    CARD_GENERATION_ENABLED = enabled
+    _log_op(operator, "card_enabled", "开启" if enabled else "关闭")
+
+
+def _load_card_settings():
+    global CARD_GENERATION_COUNT, CARD_GENERATION_ENABLED
+    saved_count = STORAGE.get_meta("card_generation_count")
+    if saved_count and saved_count.isascii() and saved_count.isdigit() and 1 <= int(saved_count) <= MAX_COUNT:
+        CARD_GENERATION_COUNT = int(saved_count)
+    saved_enabled = STORAGE.get_meta("card_generation_enabled")
+    if saved_enabled in ("0", "1"):
+        CARD_GENERATION_ENABLED = saved_enabled == "1"
 
 
 def _set_retention(days, operator):
@@ -466,12 +537,17 @@ def _history_text():
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     _record_seen(update)
+    if (q.data or "").startswith("gen:"):
+        await on_generate(q)
+        return
     if not is_super(q.from_user.id):
         await q.answer()  # 静默关闭 loading
         return
     await q.answer()
     maybe_purge()
     data = q.data
+    # Leaving an input prompt (including via an old menu) cancels the pending action.
+    context.user_data.pop("await", None)
 
     # 导航
     if data == "menu":
@@ -507,6 +583,14 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target = int(data.split(":", 1)[1])
         await _do_del_user(q.from_user.id, target, q.message.reply_text)
         await _safe_edit(q, users_panel_text(), users_panel())
+
+    # 生成设置
+    elif data in ("cg:on", "cg:off"):
+        _set_card_enabled(data == "cg:on", q.from_user.id)
+        await _safe_edit(q, settings_text(), settings_panel())
+    elif data == "cg:count":
+        context.user_data["await"] = "card_count"
+        await q.message.reply_text(f"🔢 请发送每次生成数量(1–{MAX_COUNT})。发送其它内容即取消。")
 
     # 设置日志保留天数
     elif data == "sd:custom":
@@ -614,6 +698,7 @@ def main():
     global STORAGE, LOOKUP, AUTHORIZED, LOG_RETENTION_DAYS
     setup_logging()
     STORAGE = Storage(DB_PATH)
+    _load_card_settings()
     AUTHORIZED = set(CONFIG_ADMIN_IDS) | set(STORAGE.list_users())
     # 日志保留天数优先取 DB(TG 内改过的),否则用配置默认
     saved = STORAGE.get_meta("log_retention_days")

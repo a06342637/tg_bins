@@ -10,6 +10,7 @@ import logging
 import os
 import sqlite3
 import threading
+from contextlib import contextmanager
 
 logger = logging.getLogger("tgbins.storage")
 
@@ -52,8 +53,14 @@ class Storage:
                 pass
         logger.info("SQLite 就绪:%s", path)
 
+    @contextmanager
     def _connect(self):
-        return sqlite3.connect(self.path, timeout=10)
+        connection = sqlite3.connect(self.path, timeout=10)
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     # ---------------- 授权用户 ----------------
     def add_user(self, user_id, added_by):

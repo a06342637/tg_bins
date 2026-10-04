@@ -21,6 +21,8 @@ handyapi:
       backend_key: "HAS-yyyyyyyyyyyyyyyy"
 
 settings:
+  card_generation_enabled: true     # 查询结果下显示生成虚拟卡按钮;TG 设置可覆盖
+  card_generation_count: 3          # 每次生成 1–20 个,仅号码,无日期/CVV
   log_lines: 20                     # 『历史』按钮显示最近多少条操作记录
   log_retention_days: 30            # 操作历史保留天数,超期自动清理(也可在 TG『设置』里改)
   # local_db: "data/bin-list-data.csv"   # 本地 BIN 库路径(默认已内置,一般无需改)

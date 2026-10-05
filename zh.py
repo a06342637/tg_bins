@@ -3,6 +3,10 @@
 render.py(结果展示)与 handyapi.py / lookup.py / bot.py(运行日志、操作历史)共用,集中在此便于扩充。
 未收录的值一律保留原文,绝不硬造译名。
 """
+import re
+import unicodedata
+
+from countries import COUNTRY_NAMES_ZH, COUNTRY_NAME_TO_CODE
 
 # 卡组织(品牌)中文对照;未收录保留原文
 SCHEME_ZH = {
@@ -157,6 +161,8 @@ ISSUER_ZH = {
 }
 
 COUNTRY_ZH = {
+    **COUNTRY_NAMES_ZH,
+    # 保留已有常用简称,其余国家/地区使用 CLDR 简体中文名称。
     "US": "美国", "CN": "中国", "HK": "香港", "TW": "台湾", "MO": "澳门",
     "JP": "日本", "KR": "韩国", "GB": "英国", "DE": "德国", "FR": "法国",
     "IT": "意大利", "ES": "西班牙", "PT": "葡萄牙", "NL": "荷兰", "BE": "比利时",
@@ -172,6 +178,25 @@ COUNTRY_ZH = {
     "IR": "伊朗", "IQ": "伊拉克", "LB": "黎巴嫩", "JO": "约旦", "OM": "阿曼",
     "BH": "巴林", "KZ": "哈萨克斯坦", "UZ": "乌兹别克斯坦", "GE": "格鲁吉亚",
 }
+
+
+def _normalize_country_name(name):
+    value = unicodedata.normalize("NFKD", str(name or "")).casefold().replace("&", " and ")
+    value = "".join(c for c in value if not unicodedata.combining(c))
+    return " ".join(re.sub(r"[^\w]+", " ", value).split())
+
+
+_COUNTRY_NAME_INDEX = {_normalize_country_name(name): code for name, code in COUNTRY_NAME_TO_CODE.items()}
+_COUNTRY_CODE_ALIASES = {"UK": "GB", "EL": "GR"}
+
+
+def _country_translation(a2, name=""):
+    code = str(a2 or "").strip().upper()
+    code = _COUNTRY_CODE_ALIASES.get(code, code)
+    if code in COUNTRY_ZH:
+        return COUNTRY_ZH[code]
+    code = _COUNTRY_NAME_INDEX.get(_normalize_country_name(name))
+    return COUNTRY_ZH.get(code, "")
 
 
 def flag(a2):
@@ -223,9 +248,9 @@ def issuer_zh(name):
 
 
 def country_zh(a2, fallback=""):
-    """国家中文名;未收录返回 fallback(通常是英文名)。"""
+    """优先按国家码翻译,缺失/未知时按英文名查本地表;无匹配则保留原文。"""
     a2 = (a2 or "").strip().upper()
-    return COUNTRY_ZH.get(a2) or fallback or a2 or "-"
+    return _country_translation(a2, fallback) or fallback or a2 or "-"
 
 
 def country_label(name, a2):
@@ -235,7 +260,7 @@ def country_label(name, a2):
     """
     a2 = (a2 or "").strip().upper()
     en = (name or "").strip()
-    zh = COUNTRY_ZH.get(a2, "")
+    zh = _country_translation(a2, en)
     if zh and en and zh != en:
         label = f"{zh}/{en}"
     else:

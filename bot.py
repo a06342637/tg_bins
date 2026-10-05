@@ -31,6 +31,7 @@ from telegram.ext import (
 from config import load_config
 from cardgen import MAX_COUNT, PREFIX_RE, generate_numbers
 from handyapi import KeyPool
+from inputparse import extract_prefixes
 from localbin import try_load
 from logbuffer import recent_logs, setup_logging
 from lookup import BinLookup
@@ -75,8 +76,6 @@ CARD_GENERATION_ENABLED = cfg["settings"]["card_generation_enabled"]
 CARD_GENERATION_COUNT = cfg["settings"]["card_generation_count"]
 _last_purge = 0.0           # 惰性清理时间戳
 
-# 整条消息只由数字和常见卡号分隔符组成时,才当作 BIN 查询
-DIGITS_ONLY = re.compile(r"^[\d\s\-]+$")
 INT_RE = re.compile(r"^-?\d+$")
 # Telegram 用户名:5–32 位字母/数字/下划线,字母开头,可带 @ 前缀
 USERNAME_RE = re.compile(r"^@?([A-Za-z][A-Za-z0-9_]{4,31})$")
@@ -465,16 +464,14 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"🔎 @{name} 的 user_id:{target}")
             return
 
-    # BIN 查询
-    if not DIGITS_ONLY.match(text):
-        return
-    digits = re.sub(r"\D", "", text)
-    if len(digits) < 4 or not re.fullmatch(r"[0-9]+", digits):
-        return
+    # 每行只提取开头的 BIN/卡号,附加字段不参与查询或记录。
+    for prefix in extract_prefixes(text):
+        await _reply_bin_query(update.message, uid, prefix)
 
-    disp = digits[:6] if len(digits) >= 6 else digits
-    msg = await update.message.reply_text(f"🔎 正在查询 {disp},请稍候…")
-    results, err = await LOOKUP.query(digits)
+
+async def _reply_bin_query(message, uid, disp):
+    msg = await message.reply_text(f"🔎 正在查询 {disp},请稍候…")
+    results, err = await LOOKUP.query(disp)
 
     # 操作历史里记录卡号 + 查到的国家(中文/英文 (代码));查询失败则只记卡号
     detail = disp

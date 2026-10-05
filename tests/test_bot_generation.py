@@ -3,7 +3,7 @@ import sqlite3
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 import config
 
@@ -55,7 +55,7 @@ class BotGenerationTests(unittest.IsolatedAsyncioTestCase):
         for text, prefix in (("4427425066827466", "442742"), ("442742", "442742"), ("44274", "44274"), ("4427", "4427")):
             bot.LOOKUP.query.reset_mock()
             _, progress = await self.send_text(text)
-            bot.LOOKUP.query.assert_awaited_once_with(text)
+            bot.LOOKUP.query.assert_awaited_once_with(prefix)
             markup = progress.edit_text.call_args.kwargs["reply_markup"]
             data = markup.inline_keyboard[0][0].callback_data
             self.assertEqual(data, f"gen:20002:{prefix}")
@@ -75,6 +75,35 @@ class BotGenerationTests(unittest.IsolatedAsyncioTestCase):
         await bot.on_button(update, self.context)
         update.callback_query.message.reply_text.assert_not_awaited()
         self.assertTrue(update.callback_query.answer.call_args.kwargs["show_alert"])
+
+    async def test_card_with_metadata_uses_only_bin_and_keeps_generate_button(self):
+        _, progress = await self.send_text("4111111111111111|12/30|123|VISA|TEST BANK")
+        bot.LOOKUP.query.assert_awaited_once_with("411111")
+        button = progress.edit_text.call_args.kwargs["reply_markup"].inline_keyboard[0][0]
+        self.assertEqual(button.callback_data, "gen:20002:411111")
+        details = [row[3] for row in bot.STORAGE.recent_ops()]
+        self.assertEqual(len(details), 1)
+        self.assertTrue(details[0].startswith("411111"))
+        for excluded in ("4111111111111111", "12/30", "123", "TEST BANK"):
+            self.assertNotIn(excluded, details[0])
+
+    async def test_multiple_card_lines_query_distinct_bins_in_order(self):
+        bot.LOOKUP.query.side_effect = [(None, "NOT_FOUND"), ([{"bin": "378282"}], None)]
+        message, progress = await self.send_text(
+            "4111111111111111|12/30|123\n378282246310005|12/30|1234\n411111|duplicate"
+        )
+        self.assertEqual(bot.LOOKUP.query.await_args_list, [call("411111"), call("378282")])
+        self.assertEqual(message.reply_text.await_count, 2)
+        buttons = [c.kwargs["reply_markup"].inline_keyboard[0][0].callback_data
+                   for c in progress.edit_text.await_args_list]
+        self.assertEqual(buttons, ["gen:20002:411111", "gen:20002:378282"])
+
+    async def test_batch_query_preserves_authorization_and_pending_input(self):
+        await self.send_text("4111111111111111|12/30|123", 99999)
+        bot.LOOKUP.query.assert_not_awaited()
+        self.context.user_data["await"] = "card_count"
+        await self.send_text("4111111111111111|12/30|123", 10001)
+        bot.LOOKUP.query.assert_not_awaited()
 
     async def test_each_number_is_code_and_has_exact_copy_button(self):
         for count in (1, 3, 20):
